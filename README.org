@@ -3,14 +3,27 @@
 #+EMAIL: panu.wetterstrand@iki.fi
 #+PROPERTY: mkdirp yes 
 
-This is literate programming[fn:literate-programming] Emacs org-mode
-file for provisioning developing image for my personal use.  It will
-create development environment that leans heavily on using keyboard as
-main input source. [[https://packer.io/][Packer]] is used to build [[https://www.virtualbox.org/][VirtualBox]] image that is finally
-spinned up using [[https://www.vagrantup.com/][Vagrant]].
+* About this file
 
-Created virtual machine is based on [[https://www.debian.org/][Debian]] 8.2.0 and uses [[http://www.nongnu.org/ratpoison/][Ratpoision]]
-as window manager.
+This is literate programming[fn:literate-programming] Emacs org-mode
+file for provisioning developing image for my personal use. 
+
+Virtual machines are convenient when doing software development. They
+are cheap to create and different environments can be kept separated.
+Wrecking the machine with bad configuration is not a problem because
+one can always create new one or restore saved state. Unfortunately
+many times the configuration changes are not stored anywhere and thus
+there is no repeatable procedure to build same image.
+
+If the machine configuration is kept and updated outside the virtual
+machine, the build process becomes much more repeatable. Otherwise
+Changes are that the applied changes are forgotten. This can lead to
+"works for me"-kind of problems where the required environment is not
+clear. Also I have multiple physical machines to do work and I like to
+have same kind of environment to work with. With separated
+configuration I can provision the machines when needed. It is lots
+easier than transfer whole image from physical machine to another.
+
 
 [fn:literate-programming]
 Literate programming is programming paradigm where code is embedded
@@ -21,162 +34,189 @@ one can use command ~org-babel-tangle~.
 
 
 * Usage
-
 To create actual image source code has to be [[http://orgmode.org/manual/Extracting-source-code.html][tangled]] from the source
-file. After that one can download the Debian iso image and create
-base operating system image using pakcer.
+file. After that there is three step procedure that will produce two
+images and finally start virtual machine. Stages are mainly to speed up 
+feedback cycle when developing the build scripts.
+
+** Installing operating system
+
+First we create base image with operating system.
 
 #+BEGIN_SRC sh
 packer build -f base-packer.json
 #+END_SRC
 
-At second stage the base image is configured further and the final
-image is created with following command.
+** Working image with tools
 
+Then we create new image with development tools.
 #+BEGIN_SRC sh
-packer build -f json-packer.json
+packer build -f dev-packer.json
 #+END_SRC
 
-Finally virtaul machine can be spinned up using vagrant.
+** Spinning up the machine
+
+Finally we do final configurations and spin up the virtual machine.
+
 #+BEGIN_SRC sh
 vagrant up
 #+END_SRC
 
-* Bootstrapping base image
 
-Virtual machine needs some kind of runtime environment. For that we
-have VirtualBox. However operating systems come mostly in form of
-installation CDs. These are distributed online as iso-images. First
-step is start from the iso image and create a VirtualBox
-machine. Easiest way to do it without hands is use Packer.
+* Implementation 
 
-First we need to select operating system. I use RedHat or Centos in
-work, Ubuntu is advertised for beginners, Gentoo is great but it
-compiles, a colleague adverticed Archlinux and I am an antagonist, and
-so on. For these reasons (or lack of them) I go with Debian.
+Vagrant is fully capable of creating virtual machine and installing
+required stuff. However this process can be slow and it would be done
+every time new machine is started. Also the process has to start with
+pre-made Vagrant box. If we take box someone else build there is
+little control what is inside.
 
-My packer file looks like this:
+Packer can be used to create Vagrant box from scratch. This takes
+quite much time beacsue we need to donwload the operating system
+installation media and do the actual installation procedure. To cope
+with this the process is split in two. First we install the operating
+system and store that intermediate image. From there we continue to
+create new image by installing the required tools. Finally we can use
+the second image from Vagrant to spin up the machine.
+
+Problem with using only packer is that every time the configuration
+changes new image should be build. Packer does not update running
+machine. We could include provisioning files inside the virtual
+machine, update and run them when needed. Fortunately Vagrant already
+does this for us. It allows provisioning running virtual machine
+(~vagrant provision~).
+
+At this point simple shell scripts are used to set up the machine. It
+keeps things nice and simple. With more complex provisioning tool
+(like Ansible) we could use the same provisioning with packer and then
+with Vagrant. This would make it much easier to keep running virtual
+machines and new images more indentical.
+
+** Bootstrapping base image
+
+Packer contains ~virtualbox-iso~ builder. It will download iso image from Internet and start
+VirtualBox using it. 
 
 #+BEGIN_SRC js :tangle base-packer.json
- {
-      "variables": {
-          "debian_version": "8.2.0",
-          "iso_checksum": "a41801dcc0e37bce2406e18b334f99ae366d6fde"
-      },
-      "builders": [
-          {
-              "type": "virtualbox-iso",
-              "boot_command": [
-                  "<esc><wait>",
-                  "install <wait>",
-                  "preseed/url=http://{{ .HTTPIP }}:{{ .HTTPPort }}/preseed.cfg <wait>",
-                  "debian-installer=en_US <wait>",
-                  "auto <wait>",
-                  "locale=en_US <wait>",
-                  "kbd-chooser/method=us <wait>",
-                  "keyboard-configuration/xkb-keymap=us <wait>",
-                  "netcfg/get_hostname={{ .Name }} <wait>",
-                  "netcfg/get_domain=vagrantup.com <wait>",
-                  "fb=false <wait>",
-                  "debconf/frontend=noninteractive <wait>",
-                  "console-setup/ask_detect=false <wait>",
-                  "console-keymaps-at/keymap=us <wait>",
-                  "<enter><wait>"
-              ],
-              "boot_wait": "10s",
-              "disk_size": 32768,
-              "guest_os_type": "Debian_64",
-              "http_directory": "http",
-              "iso_checksum": "{{user `iso_checksum`}}",
-              "iso_checksum_type": "sha1",
-              "iso_url": "http://cdimage.debian.org/debian-cd/{{user `debian_version`}}/amd64/iso-cd/debian-{{user `debian_version`}}-amd64-netinst.iso",
-              "ssh_username": "vagrant",
-              "ssh_password": "vagrant",
-              "ssh_port": 22,
-              "ssh_wait_timeout": "10000s",
-              "shutdown_command": "echo 'vagrant'|sudo -S /sbin/shutdown -hP now",
-              "guest_additions_path": "VBoxGuestAdditions_{{.Version}}.iso",
-              "virtualbox_version_file": ".vbox_version",
-              "vm_name": "debian-{{user `debian_version`}}-amd64",
-              "output_directory":"debian-{{user `debian_version`}}-amd64",
-              "vboxmanage": [
-                  [ "modifyvm", "{{.Name}}", "--memory", "512" ],
-                  [ "modifyvm", "{{.Name}}", "--cpus", "1" ]
-              ]
-          }
-      ],
-      "provisioners": [
-          {
-              "type": "shell",
-              "execute_command": "echo 'vagrant' | {{.Vars}} sudo -E -S bash '{{.Path}}'",
-              "scripts": [
-                  "scripts/base.sh"
-              ]
-          }
-      ]
-  }
+  {
+       "variables": {
+           "debian_version": "8.2.0",
+           "iso_checksum": "a41801dcc0e37bce2406e18b334f99ae366d6fde"
+       },
+       "builders": [
+           {
+               "type": "virtualbox-iso",
+               "boot_command": [
+                   "<esc><wait>",
+                   "install <wait>",
+                   "preseed/url=http://{{ .HTTPIP }}:{{ .HTTPPort }}/preseed.cfg <wait>",
+                   "debian-installer=en_US <wait>",
+                   "auto <wait>",
+                   "locale=en_US <wait>",
+                   "kbd-chooser/method=us <wait>",
+                   "keyboard-configuration/xkb-keymap=us <wait>",
+                   "netcfg/get_hostname={{ .Name }} <wait>",
+                   "netcfg/get_domain=vagrantup.com <wait>",
+                   "fb=false <wait>",
+                   "debconf/frontend=noninteractive <wait>",
+                   "console-setup/ask_detect=false <wait>",
+                   "console-keymaps-at/keymap=us <wait>",
+                   "<enter><wait>"
+               ],
+               "boot_wait": "10s",
+               "disk_size": 32768,
+               "guest_os_type": "Debian_64",
+               "http_directory": "http",
+               "iso_checksum": "{{user `iso_checksum`}}",
+               "iso_checksum_type": "sha1",
+               "iso_url": "http://cdimage.debian.org/debian-cd/{{user `debian_version`}}/amd64/iso-cd/debian-{{user `debian_version`}}-amd64-netinst.iso",
+               "ssh_username": "vagrant",
+               "ssh_password": "vagrant",
+               "ssh_port": 22,
+               "ssh_wait_timeout": "10000s",
+               "shutdown_command": "echo 'vagrant'|sudo -S /sbin/shutdown -hP now",
+               "guest_additions_path": "VBoxGuestAdditions_{{.Version}}.iso",
+               "virtualbox_version_file": ".vbox_version",
+               "vm_name": "debian-{{user `debian_version`}}-amd64",
+               "output_directory":"debian-{{user `debian_version`}}-amd64",
+               "vboxmanage": [
+                   [ "modifyvm", "{{.Name}}", "--memory", "512" ],
+                   [ "modifyvm", "{{.Name}}", "--cpus", "1" ]
+               ]
+           }
+       ],
+       "provisioners": [
+           {
+               "type": "shell",
+               "execute_command": "echo 'vagrant' | {{.Vars}} sudo -E -S bash '{{.Path}}'",
+               "scripts": [
+                   "scripts/base.sh"
+               ]
+           }
+       ]
+   }
 #+END_SRC
 
-First packer servers through its internal HTTP-server a configuration
-file for Debian installer. This will run through the installation
-process automatically.
+Installation is automated using so called "preseed" file. It contains
+choices for the installation program and no manual intervention is needed.
+The file is served using Packer`s internal HTTP server.
 
 #+BEGIN_SRC proceed :tangle http/preseed.cfg
-choose-mirror-bin mirror/http/proxy string
-d-i apt-setup/use_mirror boolean true
-d-i base-installer/kernel/override-image string linux-server
-d-i clock-setup/utc boolean true
-d-i clock-setup/utc-auto boolean true
-d-i finish-install/reboot_in_progress note
-d-i grub-installer/only_debian boolean true
-d-i grub-installer/bootdev string /dev/sda
-d-i keymap select us
-d-i mirror/country string manual
-d-i mirror/http/directory string /debian
-d-i mirror/http/hostname string mirrors.kernel.org
-d-i mirror/http/proxy string
-d-i partman-auto-lvm/guided_size string max
-d-i partman-auto/choose_recipe select atomic
-d-i partman-auto/method string lvm
-d-i partman-lvm/confirm boolean true
-d-i partman-lvm/confirm boolean true
-d-i partman-lvm/confirm_nooverwrite boolean true
-d-i partman-lvm/device_remove_lvm boolean true
-d-i partman/choose_partition select finish
-d-i partman/confirm boolean true
-d-i partman/confirm_nooverwrite boolean true
-d-i partman/confirm_write_new_label boolean true
-d-i passwd/root-login boolean false
-d-i passwd/root-password-again password vagrant
-d-i passwd/root-password password vagrant
-d-i passwd/user-fullname string vagrant
-d-i passwd/user-uid string 900
-d-i passwd/user-password password vagrant
-d-i passwd/user-password-again password vagrant
-d-i passwd/username string vagrant
-d-i pkgsel/include string openssh-server sudo bzip2 acpid cryptsetup zlib1g-dev
-d-i pkgsel/install-language-support boolean false
-d-i pkgsel/update-policy select unattended-upgrades
-d-i pkgsel/upgrade select full-upgrade
-# Prevent packaged version of VirtualBox Guest Additions being installed:
-d-i preseed/early_command string sed -i \
-  '/in-target/idiscover(){/sbin/discover|grep -v VirtualBox;}' \
-  /usr/lib/pre-pkgsel.d/20install-hwpackages
-d-i time/zone string UTC
-d-i user-setup/allow-password-weak boolean true
-d-i user-setup/encrypt-home boolean false
-d-i preseed/late_command string sed -i '/^deb cdrom:/s/^/#/' /target/etc/apt/sources.list
-apt-cdrom-setup apt-setup/cdrom/set-first boolean false
-apt-mirror-setup apt-setup/use_mirror boolean true
-popularity-contest popularity-contest/participate boolean false
-tasksel tasksel/first multiselect standard, ubuntu-server
+ choose-mirror-bin mirror/http/proxy string
+ d-i apt-setup/use_mirror boolean true
+ d-i base-installer/kernel/override-image string linux-server
+ d-i clock-setup/utc boolean true
+ d-i clock-setup/utc-auto boolean true
+ d-i finish-install/reboot_in_progress note
+ d-i grub-installer/only_debian boolean true
+ d-i grub-installer/bootdev string /dev/sda
+ d-i keymap select us
+ d-i mirror/country string manual
+ d-i mirror/http/directory string /debian
+ d-i mirror/http/hostname string mirrors.kernel.org
+ d-i mirror/http/proxy string
+ d-i partman-auto-lvm/guided_size string max
+ d-i partman-auto/choose_recipe select atomic
+ d-i partman-auto/method string lvm
+ d-i partman-lvm/confirm boolean true
+ d-i partman-lvm/confirm boolean true
+ d-i partman-lvm/confirm_nooverwrite boolean true
+ d-i partman-lvm/device_remove_lvm boolean true
+ d-i partman/choose_partition select finish
+ d-i partman/confirm boolean true
+ d-i partman/confirm_nooverwrite boolean true
+ d-i partman/confirm_write_new_label boolean true
+ d-i passwd/root-login boolean false
+ d-i passwd/root-password-again password vagrant
+ d-i passwd/root-password password vagrant
+ d-i passwd/user-fullname string vagrant
+ d-i passwd/user-uid string 900
+ d-i passwd/user-password password vagrant
+ d-i passwd/user-password-again password vagrant
+ d-i passwd/username string vagrant
+ d-i pkgsel/include string openssh-server sudo bzip2 acpid cryptsetup zlib1g-dev
+ d-i pkgsel/install-language-support boolean false
+ d-i pkgsel/update-policy select unattended-upgrades
+ d-i pkgsel/upgrade select full-upgrade
+ # Prevent packaged version of VirtualBox Guest Additions being installed:
+ d-i preseed/early_command string sed -i \
+   '/in-target/idiscover(){/sbin/discover|grep -v VirtualBox;}' \
+   /usr/lib/pre-pkgsel.d/20install-hwpackages
+ d-i time/zone string UTC
+ d-i user-setup/allow-password-weak boolean true
+ d-i user-setup/encrypt-home boolean false
+ d-i preseed/late_command string sed -i '/^deb cdrom:/s/^/#/' /target/etc/apt/sources.list
+ apt-cdrom-setup apt-setup/cdrom/set-first boolean false
+ apt-mirror-setup apt-setup/use_mirror boolean true
+ popularity-contest popularity-contest/participate boolean false
+ tasksel tasksel/first multiselect standard, ubuntu-server
 #+END_SRC
 
-** Basic installation
-:PROPERTIES:
-:tangle: scripts/base.sh
-:shebang: #!/bin/bash
-:END:
+*** Basic installation
+    :PROPERTIES:
+    :tangle:   scripts/base.sh
+    :shebang:  #!/bin/bash
+    :END:
 
 After installation is finished packer logs in using ssh with vagrant
 account created in installation. Now we can start running some shell
@@ -189,22 +229,22 @@ First we need curl.
 
 With curl we can download public key used by vagrant.
 #+BEGIN_SRC sh
-  cd /home/vagrant
-  mkdir -p .ssh
-  curl -L 'https://raw.github.com/mitchellh/vagrant/master/keys/vagrant.pub' -o .ssh/authorized_keys
+   cd /home/vagrant
+   mkdir -p .ssh
+   curl -L 'https://raw.github.com/mitchellh/vagrant/master/keys/vagrant.pub' -o .ssh/authorized_keys
 #+END_SRC
 
 Of course we need to set the permissions so sshd accepts the configuration files.
 #+BEGIN_SRC sh
-  chown -Rf vagrant .ssh
-  chmod 700 .ssh
-  chmod 600 .ssh/authorized_keys
+   chown -Rf vagrant .ssh
+   chmod 700 .ssh
+   chmod 600 .ssh/authorized_keys
 #+END_SRC  
 
 Vagrant and other tools uses sudo. So we allow sudoing without password and tty.
 #+BEGIN_SRC sh
-  echo 'vagrant ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
-  echo "Defaults !requiretty" >> /etc/sudoers
+   echo 'vagrant ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
+   echo "Defaults !requiretty" >> /etc/sudoers
 #+END_SRC
 
 We dont need DNS resolution on login. Mostly the connections are
@@ -212,242 +252,247 @@ coming from host machine which is unlikely be found in any DNS server.
 GSSAPI is also not used. We use public key or password.
 
 #+BEGIN_SRC sh
-  echo "UseDNS no" >> /etc/ssh/sshd_config
-  echo "GSSAPIAuthentication no" >> /etc/ssh/sshd_config
+   echo "UseDNS no" >> /etc/ssh/sshd_config
+   echo "GSSAPIAuthentication no" >> /etc/ssh/sshd_config
 #+END_SRC
 
-At this point packer shutsdown the machine and exports OVF file that will be used in the next step.
-Now the base operating system has been installed and there is working account called vagrant.
+At this point packer shutsdown the machine and exports OVF file that
+will be used in the next step.  Now the base operating system has been
+installed and there is working account called vagrant.
 
-* Building development image
+** Building development image
 
-When the operating system has been installed, we can start configure the machine to be usable.
-We want packer to continue with the base image we finished in last chapter. This need another
-confgiguration file.
+ When the operating system has been installed, we can start configure the machine to be usable.
+ We want packer to continue with the base image we finished in last chapter. This need another
+ confgiguration file.
 
-#+BEGIN_SRC js :tangle dev-packer.json :noweb yes
-{
-  "builders": [
-          {
-              "type": "virtualbox-ovf",
+ #+BEGIN_SRC js :tangle dev-packer.json :noweb yes
+ {
+   "builders": [
+           {
+               "type": "virtualbox-ovf",
 
-              "vboxmanage": [
-                  [ "modifyvm", "{{.Name}}", "--memory", "512" ],
-                  [ "modifyvm", "{{.Name}}", "--cpus", "1" ]
-              ],
-              "source_path":"debian-8.2.0-amd64/debian-8.2.0-amd64.ovf",
+               "vboxmanage": [
+                   [ "modifyvm", "{{.Name}}", "--memory", "512" ],
+                   [ "modifyvm", "{{.Name}}", "--cpus", "1" ]
+               ],
+               "source_path":"debian-8.2.0-amd64/debian-8.2.0-amd64.ovf",
 
-              "ssh_wait_timeout": "30s",
-              "ssh_username": "vagrant",
-              "ssh_password": "vagrant",
+               "ssh_wait_timeout": "30s",
+               "ssh_username": "vagrant",
+               "ssh_password": "vagrant",
 
-              "shutdown_command": "echo 'vagrant'|sudo -S /sbin/shutdown -hP now",
+               "shutdown_command": "echo 'vagrant'|sudo -S /sbin/shutdown -hP now",
 
-              "vm_name": "debian-8.2.0-amd64"
-          }
-      ],
-      "provisioners": [
-          {
-              "type": "file",
-              "source": "files",
-              "destination": "/tmp/files"
-          },
-          {
-              "type": "shell",
-              "execute_command": "echo 'vagrant' | {{.Vars}} sudo -E -S bash '{{.Path}}'",
-              "scripts": [
-                  "scripts/install.sh"
-              ]
-          }
-      ],
-      "post-processors": [
-          {
-              "type": "vagrant",
-              "compression_level": "9",
-              "output": "debian-8.2.0-amd64_{{.Provider}}.box"
-          }
-      ]
-  }
-#+END_SRC
+               "vm_name": "debian-8.2.0-amd64"
+           }
+       ],
+       "provisioners": [
+           {
+               "type": "file",
+               "source": "files",
+               "destination": "/tmp/files"
+           },
+           {
+               "type": "shell",
+               "execute_command": "echo 'vagrant' | {{.Vars}} sudo -E -S bash '{{.Path}}'",
+               "scripts": [
+                   "scripts/install.sh"
+               ]
+           }
+       ],
+       "post-processors": [
+           {
+               "type": "vagrant",
+               "compression_level": "9",
+               "output": "debian-8.2.0-amd64_{{.Provider}}.box"
+           }
+       ]
+   }
+ #+END_SRC
 
+*** Installation
+    :PROPERTIES:
+    :mkdirp:   yes
+    :tangle:   scripts/install.sh
+    :END:
 
-** Installation
-:PROPERTIES:
-:mkdirp: yes
-:tangle: scripts/install.sh
-:END:
+**** Setup apt sources
 
-*** Setup apt sources
+ First we ensure that we are using reasonable servers to load our packages.
+ #+BEGIN_SRC sh
+   apt-get -y install netselect-apt
+   netselect-apt -o /etc/apt/sources.list
+ #+END_SRC
 
-First we ensure that we are using reasonable servers to load our packages.
-#+BEGIN_SRC sh
-  apt-get -y install netselect-apt
-  netselect-apt -o /etc/apt/sources.list
-#+END_SRC
+**** Install packages
 
-*** Install packages
+ Then we install the packages
+ #+BEGIN_SRC sh
+   apt-get update
+   apt-get -y upgrade
+   apt-get -y install libgnutls28-dev wget curl dkms make nfs-common xinit ratpoison nitrogen xorg-dev libjpeg-dev libpng-dev libtiff-dev libgif-dev ncurses-dev xinit ratpoison nitrogen mercurial git cvs wmname autoconf libssl-dev
+ #+END_SRC
 
-Then we install the packages
-#+BEGIN_SRC sh
-  apt-get update
-  apt-get -y upgrade
-  apt-get -y install libgnutls28-dev wget curl dkms make nfs-common xinit ratpoison nitrogen xorg-dev libjpeg-dev libpng-dev libtiff-dev libgif-dev ncurses-dev xinit ratpoison nitrogen mercurial git cvs wmname autoconf libssl-dev
-#+END_SRC
+**** Autologin
 
-*** Autologin
+ Autologin is nice feature in virtual image used to do developing. After all the host machine probably has access controls already.
+ First we set up tty1 to autologin and then we create script that will launch X if we are in tty1.
 
-Autologin is nice feature in virtual image used to do developing. After all the host machine probably has access controls already.
-First we set up tty1 to autologin and then we create script that will launch X if we are in tty1.
+ #+BEGIN_SRC sh
+   cp /tmp/files/autologin@.service /etc/systemd/system/autologin@.service
+   ln -sf /etc/systemd/system/autologin@.service /etc/systemd/system/getty.target.wants/getty@tty1.service
+ #+END_SRC
 
-#+BEGIN_SRC sh
-  cp /tmp/files/autologin@.service /etc/systemd/system/autologin@.service
-  ln -sf /etc/systemd/system/autologin@.service /etc/systemd/system/getty.target.wants/getty@tty1.service
-#+END_SRC
+ #+BEGIN_SRC ini :tangle files/autologin@.service :mkdirp yes
+ [Unit]
+ Description=Autologin vagrant on tty %I
+ Documentation=man:agetty(8) man:systemd-getty-generator(8)
+ Documentation=http://0pointer.de/blog/projects/serial-console.html
+ After=systemd-user-sessions.service plymouth-quit-wait.service
+ After=rc-local.service
 
-#+BEGIN_SRC ini :tangle files/autologin@.service :mkdirp yes
-[Unit]
-Description=Autologin vagrant on tty %I
-Documentation=man:agetty(8) man:systemd-getty-generator(8)
-Documentation=http://0pointer.de/blog/projects/serial-console.html
-After=systemd-user-sessions.service plymouth-quit-wait.service
-After=rc-local.service
+ # If additional gettys are spawned during boot then we should make
+ # sure that this is synchronized before getty.target, even though
+ # getty.target didn't actually pull it in.
+ Before=getty.target
+ IgnoreOnIsolate=yes
 
-# If additional gettys are spawned during boot then we should make
-# sure that this is synchronized before getty.target, even though
-# getty.target didn't actually pull it in.
-Before=getty.target
-IgnoreOnIsolate=yes
+ # On systems without virtual consoles, don't start any getty. Note
+ # that serial gettys are covered by serial-getty@.service, not this
+ # unit.
+ ConditionPathExists=/dev/tty0
 
-# On systems without virtual consoles, don't start any getty. Note
-# that serial gettys are covered by serial-getty@.service, not this
-# unit.
-ConditionPathExists=/dev/tty0
+ [Service]
+ # the VT is cleared by TTYVTDisallocate
+ ExecStart=-/sbin/agetty --autologin vagrant --noclear %I $TERM
+ Type=idle
+ Restart=always
+ RestartSec=0
+ UtmpIdentifier=%I
+ TTYPath=/dev/%I
+ TTYReset=yes
+ TTYVHangup=yes
+ TTYVTDisallocate=yes
+ KillMode=process
+ IgnoreSIGPIPE=no
+ SendSIGHUP=yes
 
-[Service]
-# the VT is cleared by TTYVTDisallocate
-ExecStart=-/sbin/agetty --autologin vagrant --noclear %I $TERM
-Type=idle
-Restart=always
-RestartSec=0
-UtmpIdentifier=%I
-TTYPath=/dev/%I
-TTYReset=yes
-TTYVHangup=yes
-TTYVTDisallocate=yes
-KillMode=process
-IgnoreSIGPIPE=no
-SendSIGHUP=yes
+ # Unset locale for the console getty since the console has problems
+ # displaying some internationalized messages.
+ Environment=LANG= LANGUAGE= LC_CTYPE= LC_NUMERIC= LC_TIME= LC_COLLATE= LC_MONETARY= LC_MESSAGES= LC_PAPER= LC_NAME= LC_ADDRESS= LC_TELEPHONE= LC_MEASUREMENT= LC_IDENTIFICATION=
 
-# Unset locale for the console getty since the console has problems
-# displaying some internationalized messages.
-Environment=LANG= LANGUAGE= LC_CTYPE= LC_NUMERIC= LC_TIME= LC_COLLATE= LC_MONETARY= LC_MESSAGES= LC_PAPER= LC_NAME= LC_ADDRESS= LC_TELEPHONE= LC_MEASUREMENT= LC_IDENTIFICATION=
+ [Install]
+ WantedBy=getty.target
+ DefaultInstance=tty1
+ #+END_SRC
 
-[Install]
-WantedBy=getty.target
-DefaultInstance=tty1
-#+END_SRC
+ Start X when logging using tty1.
+ #+BEGIN_SRC sh 
+   cat <<EOT > /home/vagrant/.profile
+   if [[ -z "\$DISPLAY" ]] && [[ \$(tty) = /dev/tty1 ]]; then
+    startx
+    logout
+   fi
+   EOT
+   chown vagrant:vagrant .profile
+ #+END_SRC
 
-Start X when logging using tty1.
-#+BEGIN_SRC sh 
-  cat <<EOT > /home/vagrant/.profile
-  if [[ -z "\$DISPLAY" ]] && [[ \$(tty) = /dev/tty1 ]]; then
-   startx
-   logout
-  fi
-  EOT
-  chown vagrant:vagrant .profile
-#+END_SRC
+**** VirtualBox guest additions
+ #+BEGIN_SRC sh
+   mkdir /tmp/vbox
+   mount -o loop /home/vagrant/VBoxGuestAdditions.iso /tmp/vbox 
+   yes | sh /tmp/vbox/VBoxLinuxAdditions.run
+   umount /tmp/vbox
+   rmdir /tmp/vbox
+   rm /home/vagrant/*.iso
+   ln -s /opt/VBoxGuestAdditions-*/lib/VBoxGuestAdditions /usr/lib/VBoxGuestAdditions
+ #+END_SRC
+**** Emacs
+ #+BEGIN_SRC sh
+   EMACS_VERSION=24.5
+   cd /usr/local/src
+   curl --silent -O -L http://www.nic.funet.fi/pub/gnu/ftp.gnu.org/pub/gnu/emacs/emacs-${EMACS_VERSION}.tar.xz
+   tar --xz -xf emacs-${EMACS_VERSION}.tar.xz
+   cd emacs-${EMACS_VERSION}
+   ./configure
+   make
+   make install
+ #+END_SRC
+**** Go
+ #+BEGIN_SRC sh
+   GOVERSION=1.5.1
+   cd /usr/local/src
+   curl -s -L -O https://storage.googleapis.com/golang/go${GOVERSION}.linux-amd64.tar.gz
+   tar -C /usr/local -xzf go${GOVERSION}.linux-amd64.tar.gz
+   ln -s /usr/local/go/bin/* /usr/local/bin
+   echo "export GOPATH=\$HOME"          >> ~/.bashrc
+   echo "export PATH=\$PATH:\$HOME/bin" >> ~/.bashrc
+ #+END_SRC
+**** Clean up
+ #+BEGIN_SRC sh
+   rm -rf /home/vagrant/VBoxGuestAdditions.iso
+   rm -rf /usr/src/virtualbox-ose-guest*
+   rm -rf /usr/src/vboxguest*
+ #+END_SRC
 
-*** VirtualBox guest additions
-#+BEGIN_SRC sh
-  mkdir /tmp/vbox
-  mount -o loop /home/vagrant/VBoxGuestAdditions.iso /tmp/vbox 
-  yes | sh /tmp/vbox/VBoxLinuxAdditions.run
-  umount /tmp/vbox
-  rmdir /tmp/vbox
-  rm /home/vagrant/*.iso
-  ln -s /opt/VBoxGuestAdditions-*/lib/VBoxGuestAdditions /usr/lib/VBoxGuestAdditions
-#+END_SRC
-*** Emacs
-#+BEGIN_SRC sh
-  EMACS_VERSION=24.5
-  cd /usr/local/src
-  curl --silent -O -L http://www.nic.funet.fi/pub/gnu/ftp.gnu.org/pub/gnu/emacs/emacs-${EMACS_VERSION}.tar.xz
-  tar --xz -xf emacs-${EMACS_VERSION}.tar.xz
-  cd emacs-${EMACS_VERSION}
-  ./configure
-  make
-  make install
-#+END_SRC
-*** Go
-#+BEGIN_SRC sh
-  GOVERSION=1.5.1
-  cd /usr/local/src
-  curl -s -L -O https://storage.googleapis.com/golang/go${GOVERSION}.linux-amd64.tar.gz
-  tar -C /usr/local -xzf go${GOVERSION}.linux-amd64.tar.gz
-  ln -s /usr/local/go/bin/* /usr/local/bin
-  echo "export GOPATH=\$HOME"
-  echo "export PATH=\$PATH:\$HOME/bin"
-#+END_SRC
-*** Clean up
-#+BEGIN_SRC sh
-  rm -rf /home/vagrant/VBoxGuestAdditions.iso
-  rm -rf /usr/src/virtualbox-ose-guest*
-  rm -rf /usr/src/vboxguest*
-#+END_SRC
+** Final touch with Vagrant
 
-* Final touch with Vagrant
+ Vagrant makes spinning up (and destroying) the machine easy. Of course
+ we could create machine manally from OVF file. Then vagrant would not
+ be necessary. However Vagrant provides ability to launch the machine
+ from command line (using ~vagrant up~). It also makes it possible to
+ keep final configuration outside the machine and makes it possible to
+ alter them without need to re-create.
 
-Vagrant makes spinning up (and destroying) the machine easy.
-
-#+BEGIN_SRC ruby :tangle Vagrantfile
-Vagrant.configure("2") do |config|
-  config.vm.box = "debian-8.2.0-amd64"
-  config.vm.box_url = "file:debian-8.2.0-amd64_virtualbox.box"
-  config.vm.box_check_update = true
-  config.vm.provider "virtualbox" do |v|
-     v.gui = true
-	 v.memory = 2048
-     v.cpus = 2
-	 v.customize ["modifyvm", :id, "--clipboard", "bidirectional"]
-  end
+ #+BEGIN_SRC ruby :tangle Vagrantfile
+ Vagrant.configure("2") do |config|
+   config.vm.box = "debian-8.2.0-amd64"
+   config.vm.box_url = "file:debian-8.2.0-amd64_virtualbox.box"
+   config.vm.box_check_update = true
+   config.vm.provider "virtualbox" do |v|
+      v.gui = true
+	  v.memory = 2048
+      v.cpus = 2
+	  v.customize ["modifyvm", :id, "--clipboard", "bidirectional"]
+   end
   
-  config.vm.provision "shell", path: "scripts/provision.sh"
-end
-#+END_SRC
+   config.vm.provision "shell", path: "scripts/provision.sh"
+ end
+ #+END_SRC
 
-Also we can do final setups with vagrant. These are the most volatile
-configuration and should be changeable without creating the whole machine
-again.
+ Also we can do final setups with vagrant. These are the most volatile
+ configuration and should be changeable without creating the whole machine
+ again.
 
-#+BEGIN_SRC sh :tangle scripts/provision.sh :shebang #!/bin/bash
-  # Set up background image
+ #+BEGIN_SRC sh :tangle scripts/provision.sh :shebang #!/bin/bash
+   # Set up background image
 
-  cd /home/vagrant
-  rm -rf .emacs.d
-  hg clone https://bitbucket.org/pnuz3n/.emacs.d
+   cd /home/vagrant
+   rm -rf .emacs.d
+   hg clone https://bitbucket.org/pnuz3n/.emacs.d
 
-  cd /home/vagrant
-  curl --silent -o kiss.jpg -L "https://www.dropbox.com/s/pkg13u9wo67efh4/kiss.jpg.jpg?dl=0"
-  sudo -u vagrant sh -c "DISPLAY=:0 nitrogen --set-centered kiss.jpg --save"
+   cd /home/vagrant
+   curl --silent -o kiss.jpg -L "https://www.dropbox.com/s/pkg13u9wo67efh4/kiss.jpg.jpg?dl=0"
+   sudo -u vagrant sh -c "DISPLAY=:0 nitrogen --set-centered kiss.jpg --save"
 
-  cat <<EOT > /home/vagrant/.ratpoisonrc
-  escape C-z
+   cat <<EOT > /home/vagrant/.ratpoisonrc
+   escape C-z
 
-  bind C-1 exec rpws 1
-  bind C-2 exec rpws 2
-  bind C-3 exec rpws 3
-  bind C-4 exec rpws 4
-  bind C-5 exec rpws 5
-  bind C-6 exec rpws 6
+   bind C-1 exec rpws 1
+   bind C-2 exec rpws 2
+   bind C-3 exec rpws 3
+   bind C-4 exec rpws 4
+   bind C-5 exec rpws 5
+   bind C-6 exec rpws 6
 
-  exec wmname LG3D &
-  exec nitrogen --restore &
-  exec rpws init 6 -k
-  EOT
+   exec wmname LG3D &
+   exec nitrogen --restore &
+   exec rpws init 6 -k
+   EOT
 
-  killall xinit
+   killall xinit
 
-  chown -R vagrant:vagrant /home/vagrant
+   chown -R vagrant:vagrant /home/vagrant
 
-#+END_SRC
+ #+END_SRC
